@@ -1,0 +1,29 @@
+cvm-version: 0.10.7
+cpus: 4
+memory: 4096
+
+networks:
+  web:
+    egress: open
+
+containers:
+  - name: "secret-storage"
+    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    restart: always
+    networks: [web]
+    env:
+      - ALLOWED_REPOS: "tinfoilsh/confidential-debug-secret-consumer"
+      - DEV_SKIP_CODE_MEASUREMENT: "true"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5m
+
+shim:
+  listen-port: 443
+  upstream-port: 8089
+  paths:
+    - /health
+    - /store
+    - /pull
