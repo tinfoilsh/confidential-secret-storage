@@ -14,6 +14,7 @@ containers:
     restart: always
     networks: [web]
     env:
+      - BUCKETS_URL: "http://buckets:9000"
       - CONSUMER_HOST: "secret-consumer.tinfoil.containers.tinfoil.dev"
       - CONSUMER_REPO: "tinfoilsh/confidential-debug-secret-consumer"
     healthcheck:
@@ -21,6 +22,19 @@ containers:
       interval: 30s
       timeout: 5s
       start_period: 5m
+
+  - name: "buckets"
+    image: "ghcr.io/tinfoilsh/tinfoil-buckets-sidecar@sha256:a0f5fd6a3dbdb0a95799ae687e127bb544b7998221458ae1face3fc8c3f43f30"
+    restart: always
+    networks: [web]
+    env:
+      - PORT: "9000"
+      - BUCKET: "tinfoil-secret-storage"
+      - AWS_REGION: "us-east-2"
+      - MULTITENANT: "true"
+    secrets:
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
 
 shim:
   listen-port: 443

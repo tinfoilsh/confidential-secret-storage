@@ -2,10 +2,7 @@ module github.com/tinfoilsh/confidential-secret-storage
 
 go 1.25.5
 
-require (
-	github.com/google/uuid v1.6.0
-	github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
-)
+require github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
@@ -43,6 +40,7 @@ require (
 	github.com/google/go-sev-guest v0.14.1 // indirect
 	github.com/google/go-tdx-guest v0.3.1 // indirect
 	github.com/google/logger v1.1.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.3 // indirect
 	github.com/in-toto/attestation v1.1.2 // indirect
 	github.com/in-toto/in-toto-golang v0.9.0 // indirect
