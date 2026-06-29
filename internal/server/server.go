@@ -1,17 +1,18 @@
 // Package server implements the HTTP handlers for the confidential-secret-storage
-// enclave: /health, /store, and /pull.
+// enclave: /health, /store, and /push.
 //
 // /store encrypts and stores data with a caller-supplied key via a BucketStore.
-// /pull releases all stored data, gated by attested-client verification: the
-// caller must present a valid SNP/TDX attestation bound to a TLS client
-// certificate whose code measurement matches an allow-listed repo.
+// /push verifies the consumer enclave's attestation via tinfoil-go's SecureClient,
+// then pushes all stored secrets to the consumer's /receive endpoint over attested TLS.
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -19,9 +20,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tinfoilsh/confidential-secret-storage/internal/store"
+	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
-// Item is the metadata record for a stored secret.
 type Item struct {
 	ID        string          `json:"id"`
 	Metadata  json.RawMessage `json:"metadata"`
@@ -29,58 +30,50 @@ type Item struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// Server holds the BucketStore, in-memory index, per-item keystore, and
-// attestation config for /pull verification.
 type Server struct {
-	store   store.BucketStore
-	attCfg  *AttestationConfig
-	mu      sync.RWMutex
-	items   map[string]*Item  // itemID -> metadata
-	keys    map[string][]byte // itemID -> encryption key (v0: in-memory)
+	store        store.BucketStore
+	mu           sync.RWMutex
+	items        map[string]*Item
+	keys         map[string][]byte
+	consumerHost string
+	consumerRepo string
 }
 
-// New returns a Server backed by the given BucketStore. Pass a non-nil
-// attCfg to enable attested-client verification on /pull; pass nil to
-// allow /pull without attestation (dev/test only).
-func New(s store.BucketStore, attCfg *AttestationConfig) *Server {
+func New(s store.BucketStore, consumerHost, consumerRepo string) *Server {
 	return &Server{
-		store:  s,
-		attCfg: attCfg,
-		items:  make(map[string]*Item),
-		keys:   make(map[string][]byte),
+		store:        s,
+		items:        make(map[string]*Item),
+		keys:         make(map[string][]byte),
+		consumerHost: consumerHost,
+		consumerRepo: consumerRepo,
 	}
 }
 
-// StoreRequest is the JSON body for POST /store.
 type StoreRequest struct {
-	Data string          `json:"data"` // base64-encoded plaintext
-	ID   json.RawMessage `json:"id"`   // arbitrary metadata JSON
-	Key  string          `json:"key"`  // base64-encoded 32-byte AES key
+	Data string          `json:"data"`
+	ID   json.RawMessage `json:"id"`
+	Key  string          `json:"key"`
 }
 
-// StoreResponse is the JSON response for POST /store.
 type StoreResponse struct {
 	ItemID string `json:"item_id"`
 }
 
-// PullItem is one decrypted secret returned by POST /pull.
-type PullItem struct {
+type PushResponse struct {
+	Pushed int `json:"pushed"`
+}
+
+type ReceiveItem struct {
 	ID       string          `json:"id"`
-	Data     string          `json:"data"`     // base64-encoded plaintext
+	Data     string          `json:"data"`
 	Metadata json.RawMessage `json:"metadata"`
 }
 
-// PullResponse is the JSON response for POST /pull.
-type PullResponse struct {
-	Items []PullItem `json:"items"`
-}
-
 // Routes returns the HTTP handler with all routes registered.
-func (s *Server) Routes() http.Handler {
-	mux := http.NewServeMux()
+func (s *Server) Routes() http.Handler {	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/store", s.handleStore)
-	mux.HandleFunc("/pull", s.handlePull)
+	mux.HandleFunc("/push", s.handlePush)
 	return mux
 }
 
@@ -141,29 +134,28 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(StoreResponse{ItemID: itemID})
 }
 
-func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
+// handlePush verifies the consumer enclave's attestation via tinfoil-go's
+// SecureClient, then pushes all stored secrets to the consumer's /receive
+// endpoint over attested TLS.
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Attested-client verification: verify the caller's SNP attestation,
-	// bind the TLS client cert to the attested key, and (optionally) check
-	// the code measurement against a Sigstore-published release.
-	var repo string
-	if s.attCfg != nil {
-		var err error
-		repo, err = verifyAttestedClient(r, s.attCfg)
-		if err != nil {
-			log.Printf("/pull rejected: %v", err)
-			writeError(w, http.StatusForbidden, "attested client required: "+err.Error())
-			return
-		}
-	} else {
-		// Dev/test mode: no attestation required.
-		repo = "dev"
+	if s.consumerHost == "" || s.consumerRepo == "" {
+		writeError(w, http.StatusInternalServerError, "consumer host/repo not configured")
+		return
 	}
-	log.Printf("/pull: releasing all items to attested client (repo=%s)", repo)
+
+	sc := client.NewSecureClient(s.consumerHost, s.consumerRepo)
+	httpClient, err := sc.HTTPClient()
+	if err != nil {
+		log.Printf("/push: consumer attestation verification failed: %v", err)
+		writeError(w, http.StatusBadGateway, "consumer attestation failed: "+err.Error())
+		return
+	}
+	log.Printf("/push: consumer attested (repo=%s, tls=%s)", s.consumerRepo, sc.GroundTruth().TLSPublicKey)
 
 	s.mu.RLock()
 	ids := make([]string, 0, len(s.items))
@@ -175,7 +167,7 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	items := make([]PullItem, 0, len(ids))
+	items := make([]ReceiveItem, 0, len(ids))
 	for _, id := range ids {
 		s.mu.RLock()
 		key := s.keys[id]
@@ -184,37 +176,46 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 
 		plaintext, err := s.store.Get(ctx, id, key)
 		if err != nil {
-			log.Printf("/pull: error retrieving item %s: %v", id, err)
+			log.Printf("/push: error retrieving item %s: %v", id, err)
 			continue
 		}
 
-		items = append(items, PullItem{
+		items = append(items, ReceiveItem{
 			ID:       id,
 			Data:     base64.StdEncoding.EncodeToString(plaintext),
 			Metadata: meta.Metadata,
 		})
 	}
 
-	log.Printf("/pull: released %d items", len(items))
+	body, _ := json.Marshal(items)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+s.consumerHost+"/receive", nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Body = io.NopCloser(bytes.NewReader(body))
 
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("/push: error pushing to consumer: %v", err)
+		writeError(w, http.StatusBadGateway, "push to consumer failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("consumer returned %d", resp.StatusCode))
+		return
+	}
+
+	log.Printf("/push: pushed %d items to consumer", len(items))
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(PullResponse{Items: items})
+	json.NewEncoder(w).Encode(PushResponse{Pushed: len(items)})
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-// ItemCount returns the number of stored items (for health/diagnostics).
-func (s *Server) ItemCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.items)
-}
-
-// String returns a summary string for logging.
-func (s *Server) String() string {
-	return fmt.Sprintf("storage-server(items=%d)", s.ItemCount())
 }

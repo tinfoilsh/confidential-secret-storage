@@ -1,9 +1,6 @@
-// Package store defines the BucketStore interface and its implementations.
-//
-// v0 uses an in-enclave AES-256-GCM store that keeps ciphertext in memory
-// (ephemeral, lost on restart). v1 will swap in a buckets-sidecar backed
-// store that persists encrypted blobs to S3 via the colocated
-// tinfoil-buckets-sidecar.
+// Package store defines the BucketStore interface and an in-memory AES-256-GCM
+// implementation. The caller supplies the per-item key; the store handles
+// encryption-at-rest and retrieval.
 package store
 
 import (
@@ -19,22 +16,16 @@ import (
 // BucketStore abstracts encrypted blob storage. The caller supplies the
 // per-item key; the store handles encryption-at-rest and retrieval.
 type BucketStore interface {
-	// Put encrypts plaintext under key and stores it at itemID.
 	Put(ctx context.Context, itemID string, plaintext, key []byte) error
-	// Get retrieves and decrypts the blob at itemID using key.
 	Get(ctx context.Context, itemID string, key []byte) ([]byte, error)
-	// Delete removes the blob at itemID.
 	Delete(ctx context.Context, itemID string) error
 }
 
-// inEnclaveStore is the v0 BucketStore: AES-256-GCM with the caller-supplied
-// key, ciphertext kept in an in-memory map. Ephemeral; lost on restart.
 type inEnclaveStore struct {
-	mu  sync.RWMutex
-	data map[string][]byte // itemID -> ciphertext (nonce prepended)
+	mu   sync.RWMutex
+	data map[string][]byte
 }
 
-// NewInEnclaveStore returns a v0 in-memory BucketStore.
 func NewInEnclaveStore() BucketStore {
 	return &inEnclaveStore{data: make(map[string][]byte)}
 }

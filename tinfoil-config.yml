@@ -4,7 +4,9 @@ memory: 4096
 
 networks:
   web:
-    egress: open
+    egress:
+      allowlist:
+        - secret-consumer.tinfoil.containers.tinfoil.dev
 
 containers:
   - name: "secret-storage"
@@ -12,8 +14,8 @@ containers:
     restart: always
     networks: [web]
     env:
-      - ALLOWED_REPOS: "tinfoilsh/confidential-debug-secret-consumer"
-      - DEV_SKIP_CODE_MEASUREMENT: "true"
+      - CONSUMER_HOST: "secret-consumer.tinfoil.containers.tinfoil.dev"
+      - CONSUMER_REPO: "tinfoilsh/confidential-debug-secret-consumer"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8089/health"]
       interval: 30s
@@ -26,4 +28,4 @@ shim:
   paths:
     - /health
     - /store
-    - /pull
+    - /push

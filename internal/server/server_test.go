@@ -13,7 +13,7 @@ import (
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	return New(store.NewInEnclaveStore(), nil)
+	return New(store.NewInEnclaveStore(), "", "")
 }
 
 func TestHealth(t *testing.T) {
@@ -27,10 +27,9 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-func TestStoreAndPull(t *testing.T) {
+func TestStore(t *testing.T) {
 	srv := newTestServer(t)
 
-	// Store a secret
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i)
@@ -56,43 +55,9 @@ func TestStoreAndPull(t *testing.T) {
 	if storeResp.ItemID == "" {
 		t.Fatal("expected non-empty item_id")
 	}
-
-	// Pull without attestation (nil attCfg = dev/test mode, should succeed)
-	req = httptest.NewRequest(http.MethodPost, "/pull", nil)
-	rec = httptest.NewRecorder()
-	srv.Routes().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/pull without attestation in dev mode: expected 200, got %d", rec.Code)
-	}
-
-	// Pull should return the stored item
-	req = httptest.NewRequest(http.MethodPost, "/pull", nil)
-	rec = httptest.NewRecorder()
-	srv.Routes().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/pull with verified header: expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var pullResp PullResponse
-	if err := json.NewDecoder(rec.Body).Decode(&pullResp); err != nil {
-		t.Fatalf("decoding pull response: %v", err)
-	}
-	if len(pullResp.Items) != 1 {
-		t.Fatalf("expected 1 item, got %d", len(pullResp.Items))
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(pullResp.Items[0].Data)
-	if err != nil {
-		t.Fatalf("decoding item data: %v", err)
-	}
-	if string(decoded) != "my secret" {
-		t.Fatalf("item data = %q, want %q", decoded, "my secret")
-	}
 }
 
-func TestStoreMultipleAndPullAll(t *testing.T) {
+func TestStoreMultiple(t *testing.T) {
 	srv := newTestServer(t)
 	key := make([]byte, 32)
 	for i := range key {
@@ -113,18 +78,37 @@ func TestStoreMultipleAndPullAll(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/pull", nil)
+	srv.mu.RLock()
+	got := len(srv.items)
+	srv.mu.RUnlock()
+	if got != 3 {
+		t.Fatalf("expected 3 items, got %d", got)
+	}
+}
+
+func TestPushWithoutConsumerConfig(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Store an item first
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	storeBody, _ := json.Marshal(map[string]interface{}{
+		"data": base64.StdEncoding.EncodeToString([]byte("my secret")),
+		"key":  base64.StdEncoding.EncodeToString(key),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/store", strings.NewReader(string(storeBody)))
 	rec := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/pull: expected 200, got %d", rec.Code)
-	}
+	// Push without consumer configured should return 500
+	req = httptest.NewRequest(http.MethodPost, "/push", nil)
+	rec = httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
 
-	var pullResp PullResponse
-	json.NewDecoder(rec.Body).Decode(&pullResp)
-	if len(pullResp.Items) != 3 {
-		t.Fatalf("expected 3 items, got %d", len(pullResp.Items))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("/push without config: expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
