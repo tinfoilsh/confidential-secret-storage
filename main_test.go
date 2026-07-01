@@ -18,9 +18,9 @@ func newTestServer(t *testing.T) *Server {
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping DB-dependent tests")
 	}
-	store, err := NewStore(context.Background(), url)
+	store, err := newStore(context.Background(), url)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("newStore: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return &Server{

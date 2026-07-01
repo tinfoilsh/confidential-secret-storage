@@ -32,23 +32,6 @@ func main() {
 	if bucketsURL == "" {
 		log.Fatal("BUCKETS_URL is required")
 	}
-	dbHost := os.Getenv("DATABASE_HOST")
-	if dbHost == "" {
-		log.Fatal("DATABASE_HOST is required")
-	}
-	dbName := os.Getenv("DATABASE_DB")
-	if dbName == "" {
-		log.Fatal("DATABASE_DB is required")
-	}
-	dbUser := os.Getenv("DATABASE_USER")
-	if dbUser == "" {
-		log.Fatal("DATABASE_USER is required")
-	}
-	dbPassword := os.Getenv("DATABASE_PASSWORD")
-	if dbPassword == "" {
-		log.Fatal("DATABASE_PASSWORD is required")
-	}
-	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=require", dbUser, dbPassword, dbHost, dbName)
 	consumerRepo := os.Getenv("CONSUMER_REPO")
 	if consumerRepo == "" {
 		log.Fatal("CONSUMER_REPO is required")
@@ -57,7 +40,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, err := NewStore(ctx, databaseURL)
+	store, err := NewStoreFromEnv(ctx)
 	if err != nil {
 		log.Fatalf("opening db: %v", err)
 	}

@@ -13,7 +13,7 @@ func testStore(t *testing.T) Store {
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping DB tests")
 	}
-	store, err := NewStore(context.Background(), url)
+	store, err := newStore(context.Background(), url)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
