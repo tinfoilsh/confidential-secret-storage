@@ -12,68 +12,48 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
 type Server struct {
 	buckets      *Client
-	inventory    InventoryDB // public inventory DB (Postgres); private data is in S3 via Tinfoil buckets
+	inventory    InventoryDB       // public inventory DB (Postgres); private data is in S3 via Tinfoil buckets
 	mu           sync.RWMutex
 	keys         map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
 	consumerRepo string            // GitHub repo of the consumer to attest (hardcoded trust)
 }
 
 func main() {
-	bucketsURL := os.Getenv("BUCKETS_URL")
-	if bucketsURL == "" {
-		log.Fatal("BUCKETS_URL is required")
-	}
 	consumerRepo := os.Getenv("CONSUMER_REPO")
 	if consumerRepo == "" {
 		log.Fatal("CONSUMER_REPO is required")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	inventory, err := NewInventoryDBFromEnv(ctx)
+	inventory, err := NewInventoryDBFromEnv(context.Background())
 	if err != nil {
 		log.Fatalf("opening db: %v", err)
 	}
 	defer inventory.Close()
 
 	srv := &Server{
-		buckets:      NewBucketsClient(bucketsURL, "secret-storage"),
+		buckets:      NewBucketsClient(os.Getenv("BUCKETS_URL"), "secret-storage"),
 		inventory:    inventory,
 		keys:         make(map[string][]byte),
 		consumerRepo: consumerRepo,
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", srv.handleHealth)
-	mux.HandleFunc("/upload_key", srv.handleUploadKey)
-	mux.HandleFunc("/store", srv.handleStore)
-	mux.HandleFunc("/push", srv.handlePush)
-
-	httpSrv := &http.Server{
-		Addr:              ":8089",
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 16,
-	}
+	mux.HandleFunc("GET /health", srv.handleHealth)
+	mux.HandleFunc("POST /upload_key", srv.handleUploadKey)
+	mux.HandleFunc("POST /store", srv.handleStore)
+	mux.HandleFunc("POST /push", srv.handlePush)
 
 	log.Printf("confidential-secret-storage listening on :8089")
-	log.Fatal(httpSrv.ListenAndServe())
+	log.Fatal(http.ListenAndServe(":8089", mux))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -83,28 +63,23 @@ type uploadKeyRequest struct {
 }
 
 func (s *Server) handleUploadKey(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req uploadKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.UserID == "" {
-		writeError(w, http.StatusBadRequest, "user_id is required")
+		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
 	}
 
 	key, err := base64.StdEncoding.DecodeString(req.Key)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid base64 key")
+		http.Error(w, "invalid base64 key", http.StatusBadRequest)
 		return
 	}
 	if len(key) != 32 {
-		writeError(w, http.StatusBadRequest, "key must be 32 bytes after base64 decode")
+		http.Error(w, "key must be 32 bytes after base64 decode", http.StatusBadRequest)
 		return
 	}
 
@@ -113,8 +88,6 @@ func (s *Server) handleUploadKey(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	log.Printf("/upload_key: registered key for user %s", req.UserID)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -125,18 +98,13 @@ type storeRequest struct {
 }
 
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req storeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.UserID == "" {
-		writeError(w, http.StatusBadRequest, "user_id is required")
+		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
 	}
 
@@ -144,45 +112,42 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	encKey, ok := s.keys[req.UserID]
 	s.mu.RUnlock()
 	if !ok {
-		writeError(w, http.StatusForbidden, "no key registered for user_id; call /upload_key first")
+		http.Error(w, "no key registered for user_id; call /upload_key first", http.StatusForbidden)
 		return
 	}
 
 	plaintext, err := base64.StdEncoding.DecodeString(req.Data)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid base64 data")
+		http.Error(w, "invalid base64 data", http.StatusBadRequest)
 		return
 	}
 
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
-		writeError(w, http.StatusInternalServerError, "generating id: "+err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := hex.EncodeToString(idBytes)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
+	ctx := r.Context()
 
 	if err := s.buckets.Put(ctx, id, plaintext, encKey); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if err := s.inventory.PutItem(ctx, id, req.UserID, req.Metadata); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("/store: stored item %s for user %s (%d bytes)", id, req.UserID, len(plaintext))
-
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"item_id": id})
 }
 
 type pushRequest struct {
-	Host string `json:"host"` // consumer's domain, provided by the consumer
+	Host string `json:"host"`
 }
 
 type keyBundle struct {
@@ -191,18 +156,13 @@ type keyBundle struct {
 }
 
 func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req pushRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.Host == "" {
-		writeError(w, http.StatusBadRequest, "host is required")
+		http.Error(w, "host is required", http.StatusBadRequest)
 		return
 	}
 
@@ -213,16 +173,15 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	httpClient, err := sc.HTTPClient()
 	if err != nil {
 		log.Printf("/push: attestation failed for %s (%s): %v", req.Host, s.consumerRepo, err)
-		writeError(w, http.StatusBadGateway, "consumer attestation failed: "+err.Error())
+		http.Error(w, "consumer attestation failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
+	ctx := r.Context()
 
 	items, err := s.inventory.AllItems(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "querying items: "+err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -242,32 +201,21 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(bundles)
-	pushReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+req.Host+"/receive", bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	pushReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+req.Host+"/receive", bytes.NewReader(body))
 	pushReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(pushReq)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "push failed: "+err.Error())
+		http.Error(w, "push failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("consumer returned %d", resp.StatusCode))
+		http.Error(w, fmt.Sprintf("consumer returned %d", resp.StatusCode), http.StatusBadGateway)
 		return
 	}
 
 	log.Printf("/push: pushed %d key bundles to %s (%s)", len(bundles), req.Host, s.consumerRepo)
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"pushed": len(bundles)})
-}
-
-func writeError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
