@@ -36,25 +36,3 @@ func TestStorePutAndAllItems(t *testing.T) {
 		t.Fatalf("expected 2 items, got %d", len(items))
 	}
 }
-
-func TestStoreItemsByUser(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-
-	store.PutItem(ctx, "test-id1", "alice", json.RawMessage(`{}`))
-	store.PutItem(ctx, "test-id2", "alice", json.RawMessage(`{}`))
-	store.PutItem(ctx, "test-id3", "bob", json.RawMessage(`{}`))
-
-	items, err := store.ItemsByUser(ctx, "alice")
-	if err != nil {
-		t.Fatalf("ItemsByUser: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 items for alice, got %d", len(items))
-	}
-	for _, it := range items {
-		if it.UserID != "alice" {
-			t.Fatalf("expected alice, got %s", it.UserID)
-		}
-	}
-}

@@ -12,7 +12,6 @@ import (
 type Store interface {
 	PutItem(ctx context.Context, id, userID string, metadata json.RawMessage) error
 	AllItems(ctx context.Context) ([]item, error)
-	ItemsByUser(ctx context.Context, userID string) ([]item, error)
 	Close() error
 }
 
@@ -60,24 +59,6 @@ func (s *pgStore) AllItems(ctx context.Context) ([]item, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanItems(rows)
-}
-
-func (s *pgStore) ItemsByUser(ctx context.Context, userID string) ([]item, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, user_id, metadata, created_at FROM secret_storage_items WHERE user_id = $1 ORDER BY created_at`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanItems(rows)
-}
-
-func (s *pgStore) Close() error {
-	s.pool.Close()
-	return nil
-}
-
-func scanItems(rows pgxRows) ([]item, error) {
 	var items []item
 	for rows.Next() {
 		var it item
@@ -93,9 +74,7 @@ func scanItems(rows pgxRows) ([]item, error) {
 	return items, rows.Err()
 }
 
-type pgxRows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-	Close()
+func (s *pgStore) Close() error {
+	s.pool.Close()
+	return nil
 }

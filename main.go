@@ -20,10 +20,11 @@ import (
 )
 
 type Server struct {
-	buckets *Client
-	store   Store
-	mu      sync.RWMutex
-	keys    map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
+	buckets      *Client
+	store        Store
+	mu           sync.RWMutex
+	keys         map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
+	consumerRepo string            // GitHub repo of the consumer to attest (hardcoded trust)
 }
 
 func main() {
@@ -31,9 +32,26 @@ func main() {
 	if bucketsURL == "" {
 		log.Fatal("BUCKETS_URL is required")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+	dbHost := os.Getenv("DATABASE_HOST")
+	if dbHost == "" {
+		log.Fatal("DATABASE_HOST is required")
+	}
+	dbName := os.Getenv("DATABASE_DB")
+	if dbName == "" {
+		log.Fatal("DATABASE_DB is required")
+	}
+	dbUser := os.Getenv("DATABASE_USER")
+	if dbUser == "" {
+		log.Fatal("DATABASE_USER is required")
+	}
+	dbPassword := os.Getenv("DATABASE_PASSWORD")
+	if dbPassword == "" {
+		log.Fatal("DATABASE_PASSWORD is required")
+	}
+	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=require", dbUser, dbPassword, dbHost, dbName)
+	consumerRepo := os.Getenv("CONSUMER_REPO")
+	if consumerRepo == "" {
+		log.Fatal("CONSUMER_REPO is required")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,9 +64,10 @@ func main() {
 	defer store.Close()
 
 	srv := &Server{
-		buckets: NewBucketsClient(bucketsURL, "secret-storage"),
-		store:   store,
-		keys:    make(map[string][]byte),
+		buckets:      NewBucketsClient(bucketsURL, "secret-storage"),
+		store:        store,
+		keys:         make(map[string][]byte),
+		consumerRepo: consumerRepo,
 	}
 
 	mux := http.NewServeMux()
@@ -197,14 +216,12 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 }
 
 type pushRequest struct {
-	Host string `json:"host"`
-	Repo string `json:"repo"`
+	Host string `json:"host"` // consumer's domain, provided by the consumer
 }
 
 type keyBundle struct {
-	ID       string          `json:"id"`
-	Key      string          `json:"key"`
-	Metadata json.RawMessage `json:"metadata"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
 }
 
 func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
@@ -218,19 +235,18 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Host == "" || req.Repo == "" {
-		writeError(w, http.StatusBadRequest, "host and repo are required")
+	if req.Host == "" {
+		writeError(w, http.StatusBadRequest, "host is required")
 		return
 	}
 
-	// Attest the consumer and open an attested TLS channel to it.
-	// Keys are delivered over this channel to the consumer's /receive,
-	// not returned in the /push response, so only the attested consumer
-	// gets the keys - not whoever called /push.
-	sc := client.NewSecureClient(req.Host, req.Repo)
+	// Attest the consumer using the hardcoded repo (trust decision).
+	// Keys are delivered over this attested TLS channel to the consumer's /receive,
+	// not returned in the /push response, so only the attested consumer gets them.
+	sc := client.NewSecureClient(req.Host, s.consumerRepo)
 	httpClient, err := sc.HTTPClient()
 	if err != nil {
-		log.Printf("/push: attestation failed for %s (%s): %v", req.Host, req.Repo, err)
+		log.Printf("/push: attestation failed for %s (%s): %v", req.Host, s.consumerRepo, err)
 		writeError(w, http.StatusBadGateway, "consumer attestation failed: "+err.Error())
 		return
 	}
@@ -254,9 +270,8 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		bundles = append(bundles, keyBundle{
-			ID:       it.ID,
-			Key:      base64.StdEncoding.EncodeToString(encKey),
-			Metadata: it.Metadata,
+			ID:  it.ID,
+			Key: base64.StdEncoding.EncodeToString(encKey),
 		})
 	}
 
@@ -280,7 +295,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("/push: pushed %d key bundles to %s (%s)", len(bundles), req.Host, req.Repo)
+	log.Printf("/push: pushed %d key bundles to %s (%s)", len(bundles), req.Host, s.consumerRepo)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"pushed": len(bundles)})
 }

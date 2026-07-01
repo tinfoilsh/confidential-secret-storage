@@ -24,9 +24,10 @@ func newTestServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { store.Close() })
 	return &Server{
-		buckets: NewBucketsClient("", "secret-storage"),
-		store:   store,
-		keys:    make(map[string][]byte),
+		buckets:      NewBucketsClient("", "secret-storage"),
+		store:        store,
+		keys:         make(map[string][]byte),
+		consumerRepo: "tinfoilsh/confidential-debug-secret-consumer",
 	}
 }
 
@@ -128,7 +129,7 @@ func TestUploadKeyInvalid(t *testing.T) {
 	}
 }
 
-func TestPushMissingHostRepo(t *testing.T) {
+func TestPushMissingHost(t *testing.T) {
 	srv := newTestServer(t)
 
 	body, _ := json.Marshal(map[string]string{})
@@ -137,6 +138,6 @@ func TestPushMissingHostRepo(t *testing.T) {
 	srv.handlePush(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("/push with missing host/repo: expected 400, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("/push with missing host: expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
