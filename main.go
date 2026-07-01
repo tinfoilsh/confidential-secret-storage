@@ -21,7 +21,7 @@ import (
 
 type Server struct {
 	buckets      *Client
-	store        Store
+	meta         Metadata            // public metadata (Postgres); private data is in S3 via buckets
 	mu           sync.RWMutex
 	keys         map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
 	consumerRepo string            // GitHub repo of the consumer to attest (hardcoded trust)
@@ -40,15 +40,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, err := NewStoreFromEnv(ctx)
+	meta, err := NewMetadataFromEnv(ctx)
 	if err != nil {
 		log.Fatalf("opening db: %v", err)
 	}
-	defer store.Close()
+	defer meta.Close()
 
 	srv := &Server{
 		buckets:      NewBucketsClient(bucketsURL, "secret-storage"),
-		store:        store,
+		meta:         meta,
 		keys:         make(map[string][]byte),
 		consumerRepo: consumerRepo,
 	}
@@ -186,7 +186,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.PutItem(ctx, id, req.UserID, req.Metadata); err != nil {
+	if err := s.meta.PutItem(ctx, id, req.UserID, req.Metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	items, err := s.store.AllItems(ctx)
+	items, err := s.meta.AllItems(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "querying items: "+err.Error())
 		return

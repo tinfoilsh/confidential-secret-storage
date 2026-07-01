@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func testStore(t *testing.T) Store {
+func testStore(t *testing.T) Metadata {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping DB tests")
 	}
-	store, err := newStore(context.Background(), url)
+	store, err := newMetadata(context.Background(), url)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("newMetadata: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return store
