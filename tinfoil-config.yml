@@ -1,0 +1,52 @@
+cvm-version: 0.10.7
+cpus: 4
+memory: 4096
+
+networks:
+  egress:
+    egress:
+      allowlist:
+        - secret-consumer.tinfoil.containers.tinfoil.dev
+        - db-demo-storage.tinfoil.dev
+        - s3.us-east-2.amazonaws.com
+
+containers:
+  - name: "secret-storage"
+    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    restart: always
+    networks: [egress]
+    env:
+      - BUCKETS_URL: "http://buckets:9000"
+      - DATABASE_HOST: "db-demo-storage.tinfoil.dev"
+      - DATABASE_DB: "secret_storage"
+      - DATABASE_USER: "storage"
+      - CONSUMER_REPO: "tinfoilsh/confidential-debug-secret-consumer"
+    secrets:
+      - DATABASE_PASSWORD
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5m
+
+  - name: "buckets"
+    image: "ghcr.io/tinfoilsh/tinfoil-buckets-sidecar@sha256:a0f5fd6a3dbdb0a95799ae687e127bb544b7998221458ae1face3fc8c3f43f30"
+    restart: always
+    networks: [egress]
+    env:
+      - PORT: "9000"
+      - BUCKET: "demo-secret-storage"
+      - AWS_REGION: "us-east-2"
+      - MULTITENANT: "true"
+    secrets:
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+
+shim:
+  listen-port: 443
+  upstream-port: 8089
+  paths:
+    - /health
+    - /upload_key
+    - /store
+    - /push
