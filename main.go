@@ -21,7 +21,7 @@ import (
 
 type Server struct {
 	buckets      *Client
-	meta         Metadata            // public metadata (Postgres); private data is in S3 via buckets
+	inventory    InventoryDB       // public inventory DB (Postgres); private data is in S3 via buckets
 	mu           sync.RWMutex
 	keys         map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
 	consumerRepo string            // GitHub repo of the consumer to attest (hardcoded trust)
@@ -40,15 +40,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	meta, err := NewMetadataFromEnv(ctx)
+	inventory, err := NewInventoryDBFromEnv(ctx)
 	if err != nil {
 		log.Fatalf("opening db: %v", err)
 	}
-	defer meta.Close()
+	defer inventory.Close()
 
 	srv := &Server{
 		buckets:      NewBucketsClient(bucketsURL, "secret-storage"),
-		meta:         meta,
+		inventory:    inventory,
 		keys:         make(map[string][]byte),
 		consumerRepo: consumerRepo,
 	}
@@ -186,7 +186,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.meta.PutItem(ctx, id, req.UserID, req.Metadata); err != nil {
+	if err := s.inventory.PutItem(ctx, id, req.UserID, req.Metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	items, err := s.meta.AllItems(ctx)
+	items, err := s.inventory.AllItems(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "querying items: "+err.Error())
 		return

@@ -11,10 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Metadata is the public metadata store (Postgres). It holds item IDs, user
-// IDs, and user-supplied metadata JSON. Private data (plaintext) lives in S3
-// via the buckets sidecar — never in this database.
-type Metadata interface {
+// InventoryDB is the public inventory database (Postgres). It holds item IDs,
+// user IDs, and user-supplied metadata JSON. Private data (plaintext) lives in
+// S3 via the buckets sidecar — never in this database.
+type InventoryDB interface {
 	PutItem(ctx context.Context, id, userID string, metadata json.RawMessage) error
 	AllItems(ctx context.Context) ([]item, error)
 	Close() error
@@ -27,11 +27,11 @@ type item struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-type pgMetadata struct {
+type pgInventory struct {
 	pool *pgxpool.Pool
 }
 
-func NewMetadataFromEnv(ctx context.Context) (Metadata, error) {
+func NewInventoryDBFromEnv(ctx context.Context) (InventoryDB, error) {
 	host := os.Getenv("DATABASE_HOST")
 	if host == "" {
 		return nil, fmt.Errorf("DATABASE_HOST is required")
@@ -50,10 +50,10 @@ func NewMetadataFromEnv(ctx context.Context) (Metadata, error) {
 	}
 	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=require", user, password, host, db)
 	log.Printf("connecting to db at %s/%s", host, db)
-	return newMetadata(ctx, databaseURL)
+	return newInventoryDB(ctx, databaseURL)
 }
 
-func newMetadata(ctx context.Context, databaseURL string) (Metadata, error) {
+func newInventoryDB(ctx context.Context, databaseURL string) (InventoryDB, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to db: %w", err)
@@ -69,10 +69,10 @@ func newMetadata(ctx context.Context, databaseURL string) (Metadata, error) {
 	`); err != nil {
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
-	return &pgMetadata{pool: pool}, nil
+	return &pgInventory{pool: pool}, nil
 }
 
-func (s *pgMetadata) PutItem(ctx context.Context, id, userID string, metadata json.RawMessage) error {
+func (s *pgInventory) PutItem(ctx context.Context, id, userID string, metadata json.RawMessage) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO secret_storage_items (id, user_id, metadata) VALUES ($1, $2, $3)`,
 		id, userID, string(metadata),
@@ -80,7 +80,7 @@ func (s *pgMetadata) PutItem(ctx context.Context, id, userID string, metadata js
 	return err
 }
 
-func (s *pgMetadata) AllItems(ctx context.Context) ([]item, error) {
+func (s *pgInventory) AllItems(ctx context.Context) ([]item, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, user_id, metadata, created_at FROM secret_storage_items ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (s *pgMetadata) AllItems(ctx context.Context) ([]item, error) {
 	return items, rows.Err()
 }
 
-func (s *pgMetadata) Close() error {
+func (s *pgInventory) Close() error {
 	s.pool.Close()
 	return nil
 }

@@ -18,14 +18,14 @@ func newTestServer(t *testing.T) *Server {
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping DB-dependent tests")
 	}
-	meta, err := newMetadata(context.Background(), url)
+	inventory, err := newInventoryDB(context.Background(), url)
 	if err != nil {
-		t.Fatalf("newMetadata: %v", err)
+		t.Fatalf("newInventoryDB: %v", err)
 	}
-	t.Cleanup(func() { meta.Close() })
+	t.Cleanup(func() { inventory.Close() })
 	return &Server{
 		buckets:      NewBucketsClient("", "secret-storage"),
-		meta:         meta,
+		inventory:    inventory,
 		keys:         make(map[string][]byte),
 		consumerRepo: "tinfoilsh/confidential-debug-secret-consumer",
 	}
@@ -101,7 +101,7 @@ func TestUploadKeyAndStore(t *testing.T) {
 		t.Fatal("sidecar received no data")
 	}
 
-	items, err := srv.meta.AllItems(req.Context())
+	items, err := srv.inventory.AllItems(req.Context())
 	if err != nil {
 		t.Fatalf("AllItems: %v", err)
 	}
