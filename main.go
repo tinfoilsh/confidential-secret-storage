@@ -18,7 +18,7 @@ import (
 
 type Server struct {
 	buckets      *Client
-	inventory    InventoryDB       // public inventory DB (Postgres); private data is in S3 via Tinfoil buckets
+	inventory    InventoryDB // public inventory DB (Postgres); private data is in S3 via Tinfoil buckets
 	mu           sync.RWMutex
 	keys         map[string][]byte // userID -> encryption key (in-memory; re-uploaded via /upload_key)
 	consumerRepo string            // GitHub repo of the consumer to attest (hardcoded trust)
@@ -30,12 +30,14 @@ func main() {
 		log.Fatal("CONSUMER_REPO is required")
 	}
 
+	// Open the inventory DB (Postgres)
 	inventory, err := NewInventoryDBFromEnv(context.Background())
 	if err != nil {
 		log.Fatalf("opening db: %v", err)
 	}
 	defer inventory.Close()
 
+	// Start the secret storage server
 	srv := &Server{
 		buckets:      NewBucketsClient(os.Getenv("BUCKETS_URL"), "secret-storage"),
 		inventory:    inventory,

@@ -13,7 +13,7 @@ import (
 
 // InventoryDB is the public inventory database (Postgres). It holds item IDs,
 // user IDs, and user-supplied metadata JSON. Private data (plaintext) lives in
-// S3 via the buckets sidecar — never in this database.
+// S3 via the Tinfoil buckets sidecar — never in this database.
 type InventoryDB interface {
 	PutItem(ctx context.Context, id, userID string, metadata json.RawMessage) error
 	AllItems(ctx context.Context) ([]item, error)
