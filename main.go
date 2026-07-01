@@ -153,8 +153,8 @@ type pushRequest struct {
 }
 
 type keyBundle struct {
-	ID  string `json:"id"`
-	Key string `json:"key"`
+	UserID string `json:"user_id"`
+	Key    string `json:"key"`
 }
 
 func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
@@ -179,31 +179,18 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-
-	items, err := s.inventory.AllItems(ctx)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	bundles := make([]keyBundle, 0, len(items))
-	for _, it := range items {
-		s.mu.RLock()
-		encKey, ok := s.keys[it.UserID]
-		s.mu.RUnlock()
-		if !ok {
-			log.Printf("/push: no key for user %s, skipping item %s", it.UserID, it.ID)
-			continue
-		}
+	s.mu.RLock()
+	bundles := make([]keyBundle, 0, len(s.keys))
+	for userID, encKey := range s.keys {
 		bundles = append(bundles, keyBundle{
-			ID:  it.ID,
-			Key: base64.StdEncoding.EncodeToString(encKey),
+			UserID: userID,
+			Key:    base64.StdEncoding.EncodeToString(encKey),
 		})
 	}
+	s.mu.RUnlock()
 
 	body, _ := json.Marshal(bundles)
-	pushReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+req.Host+"/receive", bytes.NewReader(body))
+	pushReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "https://"+req.Host+"/receive", bytes.NewReader(body))
 	pushReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(pushReq)
