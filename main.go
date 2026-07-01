@@ -56,6 +56,7 @@ func main() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -90,6 +91,7 @@ func (s *Server) handleUploadKey(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	log.Printf("/upload_key: registered key for user %s", req.UserID)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -145,6 +147,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("/store: stored item %s for user %s (%d bytes)", id, req.UserID, len(plaintext))
 	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"item_id": id})
 }
 
@@ -206,5 +209,6 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("/push: pushed %d key bundles to %s (%s)", len(bundles), req.Host, s.consumerRepo)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"pushed": len(bundles)})
 }
