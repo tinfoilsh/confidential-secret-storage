@@ -12,7 +12,7 @@ networks:
 
 containers:
   - name: "secret-storage"
-    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:781dfcb463213c388950cebe56b5c29f944fdb09b28d0e359dd149974a10431e" # v0.0.1
     restart: always
     networks: [egress]
     env:
