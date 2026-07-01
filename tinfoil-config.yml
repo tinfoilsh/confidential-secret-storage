@@ -8,7 +8,7 @@ networks:
 
 containers:
   - name: "secret-storage"
-    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    image: "ghcr.io/tinfoilsh/confidential-secret-storage@sha256:9662b998289bf6c3f5ddb01002088918eecbd651a492afe3c608bc17d3b77a47" # v0.2.0
     restart: always
     networks: [web]
     env:
