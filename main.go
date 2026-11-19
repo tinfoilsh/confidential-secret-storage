@@ -13,7 +13,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go"
 )
 
 type Server struct {
@@ -174,8 +174,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	// Attest the consumer using the hardcoded repo (trust decision).
 	// Keys are delivered over this attested TLS channel to the consumer's /receive,
 	// not returned in the /push response, so only the attested consumer gets them.
-	sc := client.NewSecureClient(req.Host, s.consumerRepo)
-	httpClient, err := sc.HTTPClient()
+	httpClient, err := tinfoil.NewEnclaveHTTPClient(r.Context(), req.Host, tinfoil.Pin{Repo: s.consumerRepo}, nil)
 	if err != nil {
 		log.Printf("/push: attestation failed for %s (%s): %v", req.Host, s.consumerRepo, err)
 		http.Error(w, "consumer attestation failed: "+err.Error(), http.StatusBadGateway)
